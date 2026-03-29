@@ -162,10 +162,12 @@ async function startServer() {
 
         // 3. Se o status for aprovado, atualizar a fatura no banco
         if (status === 'approved' && invoiceId) {
-          const { error: updateError } = await supabaseAdmin
+          const { data: invoiceData, error: updateError } = await supabaseAdmin
             .from('invoices')
             .update({ status: 'paid' })
-            .eq('id', invoiceId);
+            .eq('id', invoiceId)
+            .select() // Precisamos do retorno para enviar via Webhook
+            .single();
 
           if (updateError) {
             console.error(`[Webhook MP] Erro ao atualizar fatura no Supabase:`, updateError);
@@ -173,6 +175,33 @@ async function startServer() {
           }
 
           console.log(`[Webhook MP] Fatura ${invoiceId} marcada como PAGA com sucesso!`);
+
+          // 4. Disparar Webhooks Externos (Outbound) caso a empresa possua URLs configuradas
+          try {
+            const { data: cData } = await supabaseAdmin
+              .from('companies')
+              .select('webhook_endpoints')
+              .eq('id', companyId)
+              .single();
+
+            if (cData && Array.isArray(cData.webhook_endpoints)) {
+              for (const endpoint of cData.webhook_endpoints) {
+                console.log(`[Outbound Webhook] Disparando confirmação para: ${endpoint}`);
+                fetch(endpoint, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({
+                    event: 'payment.received',
+                    timestamp: new Date().toISOString(),
+                    invoice: invoiceData
+                  })
+                }).catch(err => console.error(`[Outbound Webhook] Erro ao enviar para ${endpoint}:`, err));
+              }
+            }
+          } catch (hookError: any) {
+            // Ignorado em caso de falha de coluna ou timeout no envio
+            console.log("[Outbound Webhook] Falha ao tentar despachar webhooks:", hookError.message);
+          }
         }
 
         res.status(200).send("OK");
