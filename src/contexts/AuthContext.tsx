@@ -26,31 +26,54 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [loading, setLoading] = useState(true);
 
   const fetchProfile = useCallback(async (userId: string, email: string): Promise<AuthUser> => {
-    try {
-      // Usar o client oficial simplificadamente para evitar erros de token manual
-      const { data, error } = await supabase
-        .from('profiles')
-        .select('*')
-        .eq('id', userId)
-        .single();
+    let retries = 3;
+    const supabaseUrl = import.meta.env.VITE_SUPABASE_URL?.trim();
+    const supabaseKey = import.meta.env.VITE_SUPABASE_ANON_KEY?.trim();
+    
+    // Pegar a chave local configurada em supabase.ts
+    const localKey = 'saasfinflow-local-auth';
 
-      if (data && !error) {
-        return {
-          id: userId,
-          email,
-          role: (data.role || 'admin') as UserRole,
-          company_id: data.company_id
-        };
+    while (retries > 0) {
+      try {
+        let token = supabaseKey;
+        try {
+          const localStr = localStorage.getItem(localKey);
+          if (localStr) {
+            const parsed = JSON.parse(localStr);
+            if (parsed?.access_token) token = parsed.access_token;
+          }
+        } catch(e) {}
+
+        const res = await fetch(`${supabaseUrl}/rest/v1/profiles?id=eq.${userId}&select=*`, {
+          headers: {
+            'apikey': supabaseKey as string,
+            'Authorization': `Bearer ${token}`
+          }
+        });
+
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        
+        const json = await res.json();
+        const data = json && json.length > 0 ? json[0] : null;
+
+        if (data) {
+          return {
+            id: userId,
+            email,
+            role: (data.role || 'admin') as UserRole,
+            company_id: data.company_id
+          };
+        } else {
+           console.warn(`[Auth] Perfil não encontrado no banco para ${userId}`);
+           if (retries === 1) break;
+        }
+      } catch (err) {
+        console.warn(`[Auth] Falha no fetch manual de perfil (${4 - retries}/3):`, err);
       }
-      
-      if (error) {
-        console.warn(`[Auth] Perfil não carregado via client:`, error.message);
-      }
-    } catch (err) {
-      console.warn(`[Auth] Erro inesperado ao buscar perfil:`, err);
+      retries--;
+      if (retries > 0) await new Promise(r => setTimeout(r, 800));
     }
     
-    // Fallback de segurança para não travar o login, mas sem company_id por padrão
     return { id: userId, email, role: 'admin' as UserRole }; 
   }, []);
 
@@ -60,34 +83,38 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     // Detectar sessão explicitamente através de onAuthStateChange: 
     // Em supabase-js v2, onAuthStateChange dispara o evento INITIAL_SESSION logo na montagem, descartando a necessidade de chamada paralela que causa deadlocks de lock (storage)
     const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, s) => {
-      console.log(`[Auth] Stable state detected: ${event}`);
-      
       if (!active) return;
-
+      
+      console.log(`[Auth] Stable state detected: ${event}`);
       setSession(s);
       
       if (s) {
-        const profile = await fetchProfile(s.user.id, s.user.email!);
+        // Se já temos o user e o ID é o mesmo, não precisamos buscar de novo
+        if (user && user.id === s.user.id) {
+           setLoading(false);
+           return;
+        }
+
+        const profileData = await fetchProfile(s.user.id, s.user.email!);
         if (active) {
-          setUser(profile);
+          setUser(profileData);
           setLoading(false);
         }
       } else {
         if (active) {
-          console.log('[Auth] Sessão encerrada ou não encontrada em onAuthStateChange.');
           setUser(null);
           setLoading(false);
         }
       }
     });
 
-    // Fail-safe de 10 segundos para conexões lentas ou pausadas
+    // Fail-safe de 15 segundos para conexões lentas ou pausadas
     const timer = setTimeout(() => {
       if (active && loading) {
-        console.warn('[Auth] Time-out atingido. Liberando tela inicial por segurança.');
+        console.warn('[Auth] Time-out atingido. Otimizando estado atual.');
         setLoading(false);
       }
-    }, 10000);
+    }, 15000);
 
     return () => {
       active = false;

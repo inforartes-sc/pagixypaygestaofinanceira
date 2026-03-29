@@ -138,7 +138,7 @@ export default function Login() {
         return { data, profile };
       };
 
-      const deadlockTimeout = new Promise((_, reject) => setTimeout(() => reject(new Error('SUPABASE_DEADLOCK')), 10000));
+      const deadlockTimeout = new Promise((_, reject) => setTimeout(() => reject(new Error('SUPABASE_DEADLOCK')), 20000));
       
       const { data, profile } = await Promise.race([loginAttempt(), deadlockTimeout]) as any;
 
@@ -162,9 +162,9 @@ export default function Login() {
       console.error('[Login] Erro fatal no login:', err);
       
       if (err.message === 'SUPABASE_DEADLOCK') {
-        toast.error('Ocorreu um travamento no sistema de autenticação local. Limpando dados para correção rápida...', { duration: 5000 });
+        toast.error('O sistema de autenticação local demorou para responder. Limpando cache e tentando novamente...', { duration: 5000 });
         localStorage.clear();
-        setTimeout(() => window.location.reload(), 2000); // Reloading to apply clean state
+        setTimeout(() => window.location.reload(), 1500); 
         return;
       }
       
