@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { useParams } from 'react-router-dom';
+import { useParams, useSearchParams } from 'react-router-dom';
 import { CreditCard, CheckCircle, AlertCircle, Clock, Smartphone, FileText, ArrowRight, ShieldCheck, Copy, Check, RefreshCw } from 'lucide-react';
 import { formatCurrency, formatDate, cn } from '../lib/utils';
 import { billingService } from '../services/billingService';
@@ -23,6 +23,20 @@ export default function PaymentLink() {
   const [companyInfo, setCompanyInfo] = useState<any>(null);
   const [clientData, setClientData] = useState<any>(null);
   const [gateways, setGateways] = useState<any>({ mercado_pago: { active: false }, asaas: { active: false } });
+  const [searchParams] = useSearchParams();
+
+  useEffect(() => {
+    const status = searchParams.get('status');
+    if (status) {
+      if (status === 'success' || status === 'approved') {
+        setPaymentStep('success');
+      } else if (status === 'pending') {
+        toast.info('Seu pagamento está em análise pela operadora.', { id: 'mp_pending' });
+      } else if (status === 'failure' || status === 'rejected') {
+        toast.error('O pagamento foi recusado. Tente outro método.', { id: 'mp_fail' });
+      }
+    }
+  }, [searchParams]);
 
   useEffect(() => {
     const fetchInvoiceAndCompany = async () => {
@@ -76,21 +90,38 @@ export default function PaymentLink() {
       // Logic for initiating the selected gateway
       if (gateways.mercado_pago?.active) {
          toast.info(`Iniciando checkout ${selectedMethod.toUpperCase()} via Mercado Pago...`);
-         // In a real implementation, we would redirect to init_point from mercadoPagoService.createPreference
-         await new Promise(resolve => setTimeout(resolve, 1500));
+         
+         const accessToken = gateways.mercado_pago.access_token;
+         if (!accessToken) throw new Error("Mercado Pago não está devidamente configurado (Token faltando).");
+         
+         const pref = await mercadoPagoService.createPreference(
+           invoice.id, 
+           invoice.amount, 
+           invoice.service_name || invoice.description || "Pagamento de Fatura", 
+           accessToken
+         );
+         
+         // Redireciona para o checkout do Mercado Pago
+         window.location.href = pref.init_point;
+         return; // O fluxo é interrompido pois haverá o redirecionamento da janela
+         
       } else if (gateways.asaas?.active) {
          toast.info(`Iniciando checkout ${selectedMethod.toUpperCase()} via Asaas...`);
          await new Promise(resolve => setTimeout(resolve, 1500));
+         // Simulação temporária para Asaas
+         await billingService.updateInvoicePaymentMethod(invoice.id, selectedMethod);
+         await billingService.updateInvoiceStatus(invoice.id, 'paid');
+         setPaymentStep('success');
+         toast.success('Pagamento realizado com sucesso!');
       } else {
          // Fallback default simulation
          await new Promise(resolve => setTimeout(resolve, 2000));
+         await billingService.updateInvoicePaymentMethod(invoice.id, selectedMethod);
+         await billingService.updateInvoiceStatus(invoice.id, 'paid');
+         setPaymentStep('success');
+         toast.success('Pagamento realizado com sucesso!');
       }
       
-      await billingService.updateInvoicePaymentMethod(invoice.id, selectedMethod);
-      await billingService.updateInvoiceStatus(invoice.id, 'paid');
-      
-      setPaymentStep('success');
-      toast.success('Pagamento realizado com sucesso!');
     } catch (error) {
       toast.error(translateError(error));
       setPaymentStep('selection');

@@ -1,19 +1,46 @@
 import { supabase } from '../lib/supabase';
 
 export const mercadoPagoService = {
-  async createPreference(invoiceId: string, amount: number, description: string, companyId: string) {
+  async createPreference(invoiceId: string, amount: number, description: string, accessToken: string) {
     try {
-      // No Mercado Pago, passamos o external_reference para identificar a fatura no webhook.
+      console.log(`[MP] Criando preferência real para fatura ${invoiceId}. Valor: ${amount}. Ref: ${invoiceId}`);
       
-      console.log(`[MP] Criando preferência para fatura ${invoiceId}. Valor: ${amount}. Ref: ${invoiceId}`);
-      
-      // Simulação de resposta da API do Mercado Pago
-      // Em uma integração real via backend, você enviaria:
-      // { items: [{...}], external_reference: invoiceId, back_urls: {...} }
+      const response = await fetch("https://api.mercadopago.com/checkout/preferences", {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${accessToken}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          items: [
+            {
+              title: description || "Pagamento de Fatura",
+              unit_price: Number(amount),
+              quantity: 1,
+              currency_id: "BRL"
+            }
+          ],
+          back_urls: {
+            success: `${window.location.origin}/pay/${invoiceId}?status=success`,
+            pending: `${window.location.origin}/pay/${invoiceId}?status=pending`,
+            failure: `${window.location.origin}/pay/${invoiceId}?status=failure`
+          },
+          auto_return: "approved",
+          external_reference: invoiceId
+        })
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        console.error("Erro do Mercado Pago:", errorData);
+        throw new Error("Falha ao criar pagamento no Mercado Pago");
+      }
+
+      const data = await response.json();
       
       return {
-        id: `mp_pref_${Math.random().toString(36).substr(2, 9)}`,
-        init_point: `https://www.mercadopago.com.br/checkout/v1/redirect?pref_id=mp_pref_${Math.random().toString(36).substr(2, 9)}`,
+        id: data.id,
+        init_point: data.init_point,
         external_reference: invoiceId
       };
     } catch (error) {
