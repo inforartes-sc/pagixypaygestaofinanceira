@@ -43,7 +43,8 @@ export default function ConfirmationModal({
           initial={{ opacity: 0, scale: 0.95, y: 20 }}
           animate={{ opacity: 1, scale: 1, y: 0 }}
           exit={{ opacity: 0, scale: 0.95, y: 20 }}
-          className="relative w-full max-w-md bg-white rounded-[32px] shadow-2xl overflow-hidden border border-slate-100"
+          className="relative z-10 w-full max-w-md bg-white rounded-[32px] shadow-2xl overflow-hidden border border-slate-100"
+          onClick={(e) => e.stopPropagation()}
         >
           <div className="p-8 space-y-6">
             <div className="flex items-center justify-between">

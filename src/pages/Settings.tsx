@@ -227,7 +227,10 @@ export default function Settings() {
   };
 
   const handleResetApiKey = async () => {
-    if (!user?.company_id) return;
+    if (!user?.company_id) {
+      toast.error('Não foi possível identificar sua empresa. Tente recarregar a página.');
+      return;
+    }
     const newKey = 'sk_live_' + Math.random().toString(36).substr(2, 24);
     setIsSubmitting(true);
     try {
