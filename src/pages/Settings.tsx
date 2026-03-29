@@ -504,6 +504,26 @@ export default function Settings() {
                             })}
                           />
                         </div>
+                        <div className="space-y-2 md:col-span-2 pt-2">
+                          <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">URL de Notificações / Redirecionamento (Webhook)</label>
+                          <div className="flex items-center gap-2">
+                            <code className="flex-1 px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-mono text-slate-600 truncate select-all">
+                              {`${window.location.origin}/api/webhooks/mercadopago/${user?.company_id}`}
+                            </code>
+                            <button 
+                              type="button"
+                              onClick={() => {
+                                navigator.clipboard.writeText(`${window.location.origin}/api/webhooks/mercadopago/${user?.company_id}`);
+                                toast.success('URL de Webhook copiada!');
+                              }}
+                              className="p-2 bg-slate-50 border border-slate-200 text-slate-500 hover:text-blue-600 rounded-xl transition-colors"
+                              title="Copiar URL"
+                            >
+                              <Zap className="w-4 h-4" />
+                            </button>
+                          </div>
+                          <p className="text-[10px] text-slate-500 font-medium">Copie e cole esta URL completa no painel de desenvolvedor do Mercado Pago em <strong>Notificações Webhooks</strong> para dar baixa automática nas faturas.</p>
+                        </div>
                       </div>
                       <div className="flex justify-end pt-4">
                         <button 
@@ -577,6 +597,30 @@ export default function Settings() {
                             <option value="production">Produção (Real)</option>
                           </select>
                         </div>
+                      </div>
+                      
+                      <div className="space-y-2 pt-2 border-t border-slate-100 mt-4 pt-4">
+                        <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">URL de Notificações / Redirecionamento (Webhook)</label>
+                        <div className="flex items-center gap-2">
+                          <code className="flex-1 px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-mono text-slate-600 truncate select-all">
+                            {`${window.location.origin}/api/webhooks/asaas/${user?.company_id}`}
+                          </code>
+                          <button 
+                            type="button"
+                            onClick={() => {
+                              navigator.clipboard.writeText(`${window.location.origin}/api/webhooks/asaas/${user?.company_id}`);
+                              toast.success('URL de Webhook copiada!');
+                            }}
+                            className="p-2 bg-slate-50 border border-slate-200 text-slate-500 hover:text-indigo-600 rounded-xl transition-colors"
+                            title="Copiar URL"
+                          >
+                            <Zap className="w-4 h-4" />
+                          </button>
+                        </div>
+                        <p className="text-[10px] text-slate-500 font-medium">Configure esta URL na sua conta Asaas em <strong>Integração &gt; Webhooks</strong> escolhendo a API v3 para receber confirmações de pagamento.</p>
+                      </div>
+
+                      <div className="flex justify-end pt-4">
                         <button 
                           onClick={() => handleSavePaymentConfig('asaas')}
                           disabled={isSubmitting}
