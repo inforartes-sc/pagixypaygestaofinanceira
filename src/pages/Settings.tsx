@@ -108,14 +108,14 @@ export default function Settings() {
       try {
         const { data, error } = await supabase
           .from('companies')
-          .select('api_key')
+          .select('api_key, webhook_endpoints')
           .eq('id', user.company_id)
           .single();
         
         if (data && !error) {
           setApiData({
             api_key: data.api_key || '',
-            webhook_endpoints: [] // Column not currently in DB
+            webhook_endpoints: data.webhook_endpoints || []
           });
         }
       } catch (err) {
@@ -258,21 +258,16 @@ export default function Settings() {
     const updatedEndpoints = [...apiData.webhook_endpoints, newWebhookUrl];
     setIsSubmitting(true);
     try {
-      /* [Aguardando Migração de Banco de Dados] A coluna webhook_endpoints (tipo text[]) não existe na tabela companies ainda.
       const { error } = await supabase
         .from('companies')
         .update({ webhook_endpoints: updatedEndpoints })
         .eq('id', user.company_id);
       
       if (error) throw error;
-      */
-      
-      // Simula uma resposta de sucesso momentaneamente para demonstração de frontend
-      await new Promise(r => setTimeout(r, 500));
       
       setApiData({ ...apiData, webhook_endpoints: updatedEndpoints });
       setNewWebhookUrl('');
-      toast.success('Endpoint adicionado (Temporário no Frontend. Requer migração no banco).');
+      toast.success('Endpoint de webhook adicionado com sucesso!');
     } catch (error: any) {
       toast.error(translateError(error));
     } finally {
@@ -285,16 +280,13 @@ export default function Settings() {
     const updatedEndpoints = apiData.webhook_endpoints.filter(u => u !== url);
     setIsSubmitting(true);
     try {
-      /* [Aguardando Migração de Banco de Dados]
       const { error } = await supabase
         .from('companies')
         .update({ webhook_endpoints: updatedEndpoints })
         .eq('id', user.company_id);
       if (error) throw error;
-      */
-      await new Promise(r => setTimeout(r, 500));
       setApiData({ ...apiData, webhook_endpoints: updatedEndpoints });
-      toast.success('Endpoint removido (Temporário)');
+      toast.success('Endpoint removido');
     } catch (error: any) {
       toast.error(translateError(error));
     } finally {
