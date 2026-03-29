@@ -106,16 +106,24 @@ export default function Settings() {
     const fetchApiData = async () => {
       if (!user?.company_id) return;
       try {
+        // Tentamos buscar ambos, mas lidamos caso a coluna webhook_endpoints ainda não exista
         const { data, error } = await supabase
           .from('companies')
-          .select('api_key, webhook_endpoints')
+          .select('api_key') // Selecionamos o garantido primeiro
           .eq('id', user.company_id)
           .single();
         
         if (data && !error) {
+          // Agora tentamos buscar os webhooks separadamente ou assumimos vazio se falhar (migração)
+          const { data: hookData } = await supabase
+             .from('companies')
+             .select('webhook_endpoints')
+             .eq('id', user.company_id)
+             .single();
+
           setApiData({
             api_key: data.api_key || '',
-            webhook_endpoints: data.webhook_endpoints || []
+            webhook_endpoints: hookData?.webhook_endpoints || []
           });
         }
       } catch (err) {

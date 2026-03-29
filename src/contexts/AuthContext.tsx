@@ -26,53 +26,32 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [loading, setLoading] = useState(true);
 
   const fetchProfile = useCallback(async (userId: string, email: string): Promise<AuthUser> => {
-    let retries = 3;
-    const supabaseUrl = import.meta.env.VITE_SUPABASE_URL?.replace(/['"]/g, '');
-    const supabaseKey = import.meta.env.VITE_SUPABASE_ANON_KEY?.replace(/['"]/g, '');
-    
-    while (retries > 0) {
-      try {
-        // Obter sessão atual diretamente do localStorage para não depender do client que pode estar travado
-        let token = supabaseKey;
-        try {
-          // Fallback para pegar a sessão se existir, usando a mesma chave definida em supabase.ts
-          const localStr = localStorage.getItem('saasfinflow-local-auth-token') || localStorage.getItem('sb-' + supabaseUrl?.split('//')[1].split('.')[0] + '-auth-token');
-          if (localStr) {
-            const parsed = JSON.parse(localStr);
-            if (parsed?.access_token) token = parsed.access_token;
-          }
-        } catch(e) {}
+    try {
+      // Usar o client oficial simplificadamente para evitar erros de token manual
+      const { data, error } = await supabase
+        .from('profiles')
+        .select('*')
+        .eq('id', userId)
+        .single();
 
-        const res = await fetch(`${supabaseUrl}/rest/v1/profiles?id=eq.${userId}&select=*`, {
-          headers: {
-            'apikey': supabaseKey as string,
-            'Authorization': `Bearer ${token}`
-          }
-        });
-
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        
-        const json = await res.json();
-        const data = json && json.length > 0 ? json[0] : null;
-
-        if (data) {
-          return {
-            id: userId,
-            email,
-            role: (data.role || 'admin') as UserRole,
-            company_id: data.company_id
-          };
-        } else {
-           console.warn(`[Auth] Perfil não encontrado para ${userId}`);
-           if (retries === 1) return { id: userId, email, role: 'admin' as UserRole };
-        }
-      } catch (err) {
-        console.warn(`[Auth] Erro inesperado na busca de perfil (${4 - retries}/3):`, err);
+      if (data && !error) {
+        return {
+          id: userId,
+          email,
+          role: (data.role || 'admin') as UserRole,
+          company_id: data.company_id
+        };
       }
-      retries--;
-      if (retries > 0) await new Promise(r => setTimeout(r, 800)); // Espera curta antes de tentar de novo
+      
+      if (error) {
+        console.warn(`[Auth] Perfil não carregado via client:`, error.message);
+      }
+    } catch (err) {
+      console.warn(`[Auth] Erro inesperado ao buscar perfil:`, err);
     }
-    return { id: userId, email, role: 'admin' as UserRole }; // Fallback final
+    
+    // Fallback de segurança para não travar o login, mas sem company_id por padrão
+    return { id: userId, email, role: 'admin' as UserRole }; 
   }, []);
 
   useEffect(() => {
