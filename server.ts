@@ -278,10 +278,12 @@ async function startServer() {
     if (!invoice) return res.status(400).json({ error: "Dados da fatura ausentes" });
 
     try {
+      const { items, ...invoiceData } = invoice;
+
       // 1. Inserir fatura no banco
       const { data: newInvoice, error: invError } = await supabaseAdmin
         .from('invoices')
-        .insert(invoice)
+        .insert(invoiceData)
         .select(`
           *,
           clients (name, email, notes),
@@ -290,6 +292,18 @@ async function startServer() {
         .single();
 
       if (invError) throw invError;
+
+      // 1.1. Inserir itens se houver
+      if (items && Array.isArray(items) && items.length > 0) {
+        await supabaseAdmin.from('invoice_items').insert(
+          items.map(it => ({
+            invoice_id: newInvoice.id,
+            service_id: it.service_id,
+            amount: it.amount,
+            description: it.description
+          }))
+        );
+      }
 
       // 2. Tentar disparar webhooks para sistemas externos (SmartCartão)
       const companyId = newInvoice.company_id;
@@ -503,7 +517,7 @@ async function startServer() {
 
     const { data: subs, error } = await supabaseAdmin
       .from('subscriptions')
-      .select('*, clients(id, name, email, notes)')
+      .select('*, clients(id, name, email, notes), subscription_items(*)')
       .eq('status', 'active')
       .eq('next_billing_date', targetDateStr);
 
@@ -537,6 +551,18 @@ async function startServer() {
           .single();
 
         if (invErr) throw invErr;
+
+        // Copiar itens da assinatura para a fatura
+        const subItems = sub.subscription_items || [];
+        if (subItems.length > 0) {
+          await supabaseAdmin.from('invoice_items').insert(
+            subItems.map((it: any) => ({
+              invoice_id: invoice.id,
+              service_id: it.service_id,
+              amount: it.amount
+            }))
+          );
+        }
 
         // Avançar data de cobrança
         const nextDueDate = new Date(sub.next_billing_date);

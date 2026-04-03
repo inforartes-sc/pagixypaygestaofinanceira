@@ -48,6 +48,7 @@ export default function Billing() {
     payment_method: 'pix' as PaymentMethod,
     status: 'pending' as InvoiceStatus
   });
+  const [invoiceItems, setInvoiceItems] = useState<{service_id: string, name: string, amount: number}[]>([]);
 
   const [subFormData, setSubFormData] = useState({
     client_id: '',
@@ -56,6 +57,7 @@ export default function Billing() {
     interval: 'monthly' as 'weekly' | 'monthly' | 'yearly',
     next_billing_date: ''
   });
+  const [subItems, setSubItems] = useState<{service_id: string, name: string, amount: number}[]>([]);
 
   const [quickClientData, setQuickClientData] = useState({
     name: '',
@@ -164,12 +166,40 @@ export default function Billing() {
 
   const handleServiceChange = (serviceId: string, type: 'invoice' | 'subscription') => {
     const service = services.find(s => s.id === serviceId);
-    if (service) {
-      if (type === 'invoice') {
-        setFormData(prev => ({ ...prev, service_id: serviceId, amount: service.base_price.toString() }));
-      } else {
-        setSubFormData(prev => ({ ...prev, service_id: serviceId, amount: service.base_price.toString() }));
-      }
+    if (!service) return;
+
+    if (type === 'invoice') {
+      const alreadyHas = invoiceItems.find(it => it.service_id === serviceId);
+      if (alreadyHas) return; // Don't add duplicate
+      
+      const newItems = [...invoiceItems, { service_id: service.id, name: service.name, amount: service.base_price }];
+      setInvoiceItems(newItems);
+      
+      const totalAmount = newItems.reduce((acc, it) => acc + it.amount, 0);
+      setFormData(prev => ({ ...prev, amount: totalAmount.toString() }));
+    } else {
+      const alreadyHas = subItems.find(it => it.service_id === serviceId);
+      if (alreadyHas) return;
+
+      const newItems = [...subItems, { service_id: service.id, name: service.name, amount: service.base_price }];
+      setSubItems(newItems);
+      
+      const totalAmount = newItems.reduce((acc, it) => acc + it.amount, 0);
+      setSubFormData(prev => ({ ...prev, amount: totalAmount.toString() }));
+    }
+  };
+
+  const removeServiceItem = (serviceId: string, type: 'invoice' | 'subscription') => {
+    if (type === 'invoice') {
+      const newItems = invoiceItems.filter(it => it.service_id !== serviceId);
+      setInvoiceItems(newItems);
+      const totalAmount = newItems.reduce((acc, it) => acc + it.amount, 0);
+      setFormData(prev => ({ ...prev, amount: totalAmount.toString() }));
+    } else {
+      const newItems = subItems.filter(it => it.service_id !== serviceId);
+      setSubItems(newItems);
+      const totalAmount = newItems.reduce((acc, it) => acc + it.amount, 0);
+      setSubFormData(prev => ({ ...prev, amount: totalAmount.toString() }));
     }
   };
 
@@ -197,15 +227,16 @@ export default function Billing() {
       await billingService.createInvoice({
         company_id: targetCompanyId,
         client_id: formData.client_id,
-        service_id: formData.service_id || undefined,
+        service_id: invoiceItems.length === 1 ? invoiceItems[0].service_id : undefined, // Compatibility
         amount: Number(formData.amount),
         due_date: formData.due_date,
         payment_method: formData.payment_method,
         status: formData.status
-      });
+      }, invoiceItems);
       toast.success('Cobrança criada com sucesso!');
       setIsModalOpen(false);
       setFormData({ client_id: '', service_id: '', amount: '', due_date: '', status: 'pending', payment_method: 'pix' });
+      setInvoiceItems([]);
       setActiveTab('invoices'); // Switch to invoices tab
       fetchInvoices();
     } catch (error: any) {
@@ -240,15 +271,16 @@ export default function Billing() {
       await billingService.createSubscription({
         company_id: targetCompanyId,
         client_id: subFormData.client_id,
-        service_id: subFormData.service_id || undefined,
+        service_id: subItems.length === 1 ? subItems[0].service_id : undefined, // Compatibility
         amount: Number(subFormData.amount),
         interval: subFormData.interval,
         status: 'active',
         next_billing_date: subFormData.next_billing_date
-      });
+      }, subItems);
       toast.success('Assinatura criada com sucesso!');
       setIsSubModalOpen(false);
       setSubFormData({ client_id: '', service_id: '', amount: '', interval: 'monthly', next_billing_date: '' });
+      setSubItems([]);
       setActiveTab('subscriptions'); // Switch to subscriptions tab
       fetchSubscriptions();
     } catch (error: any) {
@@ -576,7 +608,11 @@ export default function Billing() {
                           <p className="text-sm font-bold text-slate-700">{invoice.client_name}</p>
                         </td>
                         <td className="px-6 py-4">
-                          <p className="text-xs text-slate-500">{invoice.service_name || '-'}</p>
+                          <p className="text-xs text-slate-500">
+                            {invoice.items && invoice.items.length > 1 
+                              ? `${invoice.items[0].service_name} +${invoice.items.length - 1}` 
+                              : invoice.service_name || '-'}
+                          </p>
                         </td>
                         <td className="px-6 py-4">
                           <p className="text-sm font-bold text-slate-900">{formatCurrency(invoice.amount)}</p>
@@ -688,7 +724,11 @@ export default function Billing() {
                         <p className="text-sm font-bold text-slate-700">{sub.client_name}</p>
                       </td>
                       <td className="px-6 py-4">
-                        <p className="text-xs text-slate-500">{sub.service_name || '-'}</p>
+                        <p className="text-xs text-slate-500">
+                          {sub.items && sub.items.length > 1 
+                            ? `${sub.items[0].service_name} +${sub.items.length - 1}` 
+                            : sub.service_name || '-'}
+                        </p>
                       </td>
                       <td className="px-6 py-4">
                         <p className="text-sm font-bold text-slate-900">{formatCurrency(sub.amount)}</p>
@@ -793,18 +833,41 @@ export default function Billing() {
                 </div>
 
                 <div className="space-y-1.5">
-                  <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">Serviço</label>
+                  <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">Adicionar Serviço</label>
                   <select 
                     className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
-                    value={formData.service_id}
+                    value=""
                     onChange={(e) => handleServiceChange(e.target.value, 'invoice')}
                   >
-                    <option value="">Selecione um serviço (opcional)</option>
+                    <option value="">Selecione um serviço para adicionar...</option>
                     {services.map(service => (
                       <option key={service.id} value={service.id}>{service.name}</option>
                     ))}
                   </select>
                 </div>
+
+                {invoiceItems.length > 0 && (
+                  <div className="space-y-2">
+                    <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">Serviços Selecionados</label>
+                    <div className="space-y-2 max-h-32 overflow-y-auto pr-2">
+                      {invoiceItems.map((item) => (
+                        <div key={item.service_id} className="flex items-center justify-between p-2 bg-slate-50 rounded-lg border border-slate-100">
+                          <span className="text-xs font-medium text-slate-700">{item.name}</span>
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs font-bold text-indigo-600">{formatCurrency(item.amount)}</span>
+                            <button 
+                              type="button" 
+                              onClick={() => removeServiceItem(item.service_id, 'invoice')}
+                              className="p-1 text-slate-400 hover:text-red-600"
+                            >
+                              <X className="w-4 h-4" />
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
 
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-1.5">
@@ -931,18 +994,41 @@ export default function Billing() {
                 </div>
 
                 <div className="space-y-1.5">
-                  <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">Serviço</label>
+                  <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">Adicionar Serviço</label>
                   <select 
                     className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
-                    value={subFormData.service_id}
+                    value=""
                     onChange={(e) => handleServiceChange(e.target.value, 'subscription')}
                   >
-                    <option value="">Selecione um serviço (opcional)</option>
+                    <option value="">Selecione um serviço para adicionar...</option>
                     {services.map(service => (
                       <option key={service.id} value={service.id}>{service.name}</option>
                     ))}
                   </select>
                 </div>
+
+                {subItems.length > 0 && (
+                  <div className="space-y-2">
+                    <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">Serviços Selecionados</label>
+                    <div className="space-y-2 max-h-32 overflow-y-auto pr-2">
+                      {subItems.map((item) => (
+                        <div key={item.service_id} className="flex items-center justify-between p-2 bg-slate-50 rounded-lg border border-slate-100">
+                          <span className="text-xs font-medium text-slate-700">{item.name}</span>
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs font-bold text-indigo-600">{formatCurrency(item.amount)}</span>
+                            <button 
+                              type="button" 
+                              onClick={() => removeServiceItem(item.service_id, 'subscription')}
+                              className="p-1 text-slate-400 hover:text-red-600"
+                            >
+                              <X className="w-4 h-4" />
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
 
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-1.5">
@@ -1175,18 +1261,35 @@ export default function Billing() {
                       </tr>
                     </thead>
                     <tbody>
-                      <tr className="border-b border-slate-50 font-medium">
-                        <td className="px-4 py-6">
-                          <p className="text-sm text-slate-900 font-bold">{selectedInvoice.service_name || 'Serviço Profissional'}</p>
-                          <p className="text-xs text-slate-500 mt-1">{selectedInvoice.description || (selectedInvoice.subscription_id ? 'Serviço de Assinatura Recorrente' : 'Execução de serviços conforme contrato.')}</p>
-                        </td>
-                        <td className="px-4 py-6 text-sm text-slate-600 text-center">
-                          {formatDate(selectedInvoice.due_date)}
-                        </td>
-                        <td className="px-4 py-6 text-sm text-slate-900 font-bold text-right">
-                          {formatCurrency(selectedInvoice.amount)}
-                        </td>
-                      </tr>
+                      {selectedInvoice.items && selectedInvoice.items.length > 0 ? (
+                        selectedInvoice.items.map((item) => (
+                          <tr key={item.id} className="border-b border-slate-50">
+                            <td className="px-4 py-4">
+                              <p className="text-sm text-slate-900 font-bold">{item.service_name || 'Serviço'}</p>
+                              {item.description && <p className="text-[10px] text-slate-500">{item.description}</p>}
+                            </td>
+                            <td className="px-4 py-4 text-sm text-slate-600 text-center">
+                              {formatDate(selectedInvoice.due_date)}
+                            </td>
+                            <td className="px-4 py-4 text-sm text-slate-900 font-bold text-right">
+                              {formatCurrency(item.amount)}
+                            </td>
+                          </tr>
+                        ))
+                      ) : (
+                        <tr className="border-b border-slate-50 font-medium">
+                          <td className="px-4 py-6">
+                            <p className="text-sm text-slate-900 font-bold">{selectedInvoice.service_name || 'Serviço Profissional'}</p>
+                            <p className="text-xs text-slate-500 mt-1">{selectedInvoice.description || (selectedInvoice.subscription_id ? 'Serviço de Assinatura Recorrente' : 'Execução de serviços conforme contrato.')}</p>
+                          </td>
+                          <td className="px-4 py-6 text-sm text-slate-600 text-center">
+                            {formatDate(selectedInvoice.due_date)}
+                          </td>
+                          <td className="px-4 py-6 text-sm text-slate-900 font-bold text-right">
+                            {formatCurrency(selectedInvoice.amount)}
+                          </td>
+                        </tr>
+                      )}
                     </tbody>
                   </table>
                 </div>
@@ -1323,6 +1426,72 @@ export default function Billing() {
                     <p className="text-sm font-medium text-slate-700">{formatDate(selectedSubscription.created_at)}</p>
                   </div>
                 </div>
+
+                {selectedSubscription.items && selectedSubscription.items.length > 0 && (
+                  <div className="space-y-3">
+                    <div className="flex items-center justify-between">
+                      <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Serviços Inclusos</p>
+                      <button 
+                         onClick={() => {
+                           const el = document.getElementById('add-srv-dropdown');
+                           if (el) el.classList.toggle('hidden');
+                         }}
+                         className="text-[10px] font-bold text-indigo-600 hover:text-indigo-800"
+                      >
+                        + Adicionar Mais
+                      </button>
+                    </div>
+                    <div className="space-y-2">
+                      {selectedSubscription.items.map((item) => (
+                        <div key={item.id} className="flex items-center justify-between p-3 bg-slate-50 rounded-xl border border-slate-100">
+                          <span className="text-xs font-bold text-slate-700">{item.service_name || 'Serviço'}</span>
+                          <span className="text-xs font-bold text-indigo-600">{formatCurrency(item.amount)}</span>
+                        </div>
+                      ))}
+                    </div>
+
+                    <div id="add-srv-dropdown" className="hidden space-y-3 p-4 bg-slate-50 rounded-xl border border-dashed border-slate-300">
+                      <select 
+                        id="new-srv-select"
+                        className="w-full px-3 py-2 bg-white border border-slate-200 rounded-lg text-xs"
+                      >
+                        <option value="">Selecione um serviço...</option>
+                        {services.filter(s => !selectedSubscription.items?.some(it => it.service_id === s.id)).map(service => (
+                          <option key={service.id} value={service.id}>{service.name} ({formatCurrency(service.base_price)})</option>
+                        ))}
+                      </select>
+                      <button 
+                        type="button"
+                        onClick={async () => {
+                          const sel = document.getElementById('new-srv-select') as HTMLSelectElement;
+                          if (!sel.value) return;
+                          
+                          const srv = services.find(s => s.id === sel.value);
+                          if (!srv) return;
+
+                          setIsSubmitting(true);
+                          try {
+                            await billingService.addServiceToSubscription(selectedSubscription.id, srv.id, srv.base_price);
+                            toast.success('Serviço adicionado à assinatura!');
+                            document.getElementById('add-srv-dropdown')?.classList.add('hidden');
+                            // Refresh
+                            const updated = await billingService.getSubscriptions(undefined, user?.company_id);
+                            setSubscriptions(updated);
+                            const newSelected = updated.find(s => s.id === selectedSubscription.id);
+                            if (newSelected) setSelectedSubscription(newSelected);
+                          } catch (e) {
+                            toast.error('Erro ao adicionar serviço');
+                          } finally {
+                            setIsSubmitting(false);
+                          }
+                        }}
+                        className="w-full py-2 bg-indigo-600 text-white rounded-lg text-xs font-bold"
+                      >
+                        Confirmar Adição
+                      </button>
+                    </div>
+                  </div>
+                )}
 
                 <div className="pt-6 border-t border-slate-100 flex flex-col gap-2">
                   {selectedSubscription.status === 'active' ? (

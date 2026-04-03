@@ -57,6 +57,16 @@ export interface Service {
   created_at: string;
 }
 
+export interface InvoiceItem {
+  id: string;
+  invoice_id: string;
+  service_id: string;
+  service_name?: string;
+  amount: number;
+  description?: string;
+  created_at: string;
+}
+
 export interface Invoice {
   id: string;
   company_id: string;
@@ -70,6 +80,16 @@ export interface Invoice {
   payment_method: PaymentMethod;
   subscription_id?: string;
   description?: string;
+  items?: InvoiceItem[];
+  created_at: string;
+}
+
+export interface SubscriptionItem {
+  id: string;
+  subscription_id: string;
+  service_id: string;
+  service_name?: string;
+  amount: number;
   created_at: string;
 }
 
@@ -84,6 +104,7 @@ export interface Subscription {
   interval: 'weekly' | 'monthly' | 'semiannual' | 'yearly';
   status: 'active' | 'inactive' | 'cancelled';
   next_billing_date: string;
+  items?: SubscriptionItem[];
   created_at: string;
 }
 
