@@ -75,14 +75,19 @@ export const billingService = {
   },
 
   async createInvoice(invoice: Omit<Invoice, 'id' | 'created_at'>): Promise<Invoice> {
-    const { data, error } = await supabase
-      .from('invoices')
-      .insert([invoice])
-      .select()
-      .single();
+    const response = await fetch('/api/admin/create-invoice', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ invoice })
+    });
 
-    if (error) throw error;
-    return data;
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || 'Erro ao criar fatura no servidor');
+    }
+
+    const data = await response.json();
+    return data.invoice;
   },
 
   async updateInvoiceStatus(id: string, status: InvoiceStatus): Promise<void> {

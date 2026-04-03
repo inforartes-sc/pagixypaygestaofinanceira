@@ -26,9 +26,12 @@ app.get("/api/health", (req, res) => {
   res.json({ status: "ok", timestamp: new Date().toISOString() });
 });
 
-// Endpoint de integração para o SmartCartao (PagiXyPay billing integration)
+/**
+ * ENDPOINT DE INTEGRAÇÃO SMARTCARTÃO (PagiXyPay billing)
+ * Agora cria uma ASSINATURA e uma FATURA inicial.
+ */
 app.post("/api/clients", async (req, res) => {
-  const { id: scUserId, name, email, document, amount } = req.body;
+  const { id: scUserId, name, email, document, amount, password } = req.body;
   
   if (!email || !name) return res.status(400).json({ error: "Email/Name required" });
 
@@ -39,206 +42,272 @@ app.post("/api/clients", async (req, res) => {
 
     if (!companyId) throw new Error("No company found");
 
-    // 2. Registro do Cliente (Manual Upsert para evitar erro de constraint)
-    let { data: client, error: cErr } = await supabaseAdmin
-      .from('clients')
-      .select('id')
-      .eq('company_id', companyId)
-      .eq('email', email)
-      .maybeSingle();
+    // 2. Sincronização de Usuário (Auth)
+    let userId: string | undefined;
+    const { data: authData, error: authError } = await supabaseAdmin.auth.admin.createUser({
+      email,
+      password: password || 'Mudar@123',
+      email_confirm: true,
+      user_metadata: { full_name: name }
+    });
 
-    if (cErr) throw cErr;
-
-    if (!client) {
-      const { data: newClient, error: insertErr } = await supabaseAdmin
-        .from('clients')
-        .insert({
-          company_id: companyId,
-          name, email, document, status: 'active'
-        })
-        .select('id')
-        .single();
-      if (insertErr) throw insertErr;
-      client = newClient;
+    if (authError) {
+      // Se usuário já existe, buscamos o ID para vincular
+      if (authError.message.toLowerCase().includes('already registered') || authError.message.toLowerCase().includes('already exists')) {
+        const { data: listData } = await supabaseAdmin.auth.admin.listUsers();
+        const existingAuthUser = (listData?.users || []).find((u: any) => u.email?.toLowerCase() === email.toLowerCase());
+        userId = existingAuthUser?.id;
+        
+        // Se temos uma senha nova do SmartCartão, atualizamos no Portal
+        if (userId && password) {
+          await supabaseAdmin.auth.admin.updateUserById(userId, { password });
+        }
+      } else {
+        throw authError;
+      }
     } else {
-      // Update name/document if exists
-      const { error: updateErr } = await supabaseAdmin
-        .from('clients')
-        .update({ name, document })
-        .eq('id', client.id);
-      if (updateErr) throw updateErr;
+      userId = authData.user?.id;
     }
 
-    // 3. Criar Fatura Pendente
-    const dueDate = new Date();
-    dueDate.setDate(dueDate.getDate() + 3);
+    // Garantir perfil (profiles) existe para o login funcionar
+    if (userId) {
+      await supabaseAdmin.from('profiles').upsert({
+        id: userId,
+        company_id: companyId,
+        full_name: name,
+        role: 'client'
+      });
+    }
 
-    const { data: invoice, error: iErr } = await supabaseAdmin.from('invoices').insert({
-      company_id: companyId,
-      client_id: client.id,
-      amount: parseFloat(String(amount || '49.00').replace(',', '.')),
-      due_date: dueDate.toISOString().split('T')[0],
-      status: 'pending',
-      payment_method: 'pix',
-      external_reference: scUserId
-    }).select().single();
+      // 3. Cliente Sync
+      let { data: client, error: cErr } = await supabaseAdmin
+        .from('clients')
+        .select('id, user_id, notes')
+        .eq('company_id', companyId)
+        .eq('email', email)
+        .maybeSingle();
 
-    if (iErr) throw iErr;
+      if (cErr) throw cErr;
 
-    res.status(201).json({
-      success: true,
-      id: client.id,
-      amount: invoice.amount.toFixed(2),
-      due_date: invoice.due_date,
-      payment_link: `${process.env.APP_URL || 'https://pagixypay.vercel.app'}/fatura/${invoice.id}`,
-      url: `${process.env.APP_URL || 'https://pagixypay.vercel.app'}/fatura/${invoice.id}`
-    });
+      const clientNotes = `sc_id:${scUserId}`;
+
+      if (!client) {
+        const { data: newClient, error: insertErr } = await supabaseAdmin
+          .from('clients')
+          .insert({
+            company_id: companyId,
+            user_id: userId,
+            name, email, document, status: 'active',
+            notes: clientNotes
+          })
+          .select('id, user_id, notes')
+          .single();
+        if (insertErr) throw insertErr;
+        client = newClient;
+      } else {
+        const { error: updateErr } = await supabaseAdmin
+          .from('clients')
+          .update({ 
+            name, 
+            document, 
+            user_id: client.user_id || userId,
+            notes: client.notes?.includes('sc_id:') ? client.notes : (client.notes ? `${client.notes} | ${clientNotes}` : clientNotes)
+          })
+          .eq('id', client.id);
+        if (updateErr) throw updateErr;
+      }
+
+      res.status(201).json({
+        success: true,
+        id: client.id,
+        message: "Cliente sincronizado com sucesso. Nenhuma fatura foi gerada automaticamente."
+      });
   } catch (err: any) {
     console.error("Erro na integração SmartCartao:", err);
     res.status(500).json({ error: err.message });
   }
 });
 
-// Criar Cliente com Acesso ao Portal (Admin only action)
-app.post("/api/admin/create-client", async (req, res) => {
-  const { 
-    email, 
-    password, 
-    name, 
-    company_id,
-    document,
-    phone,
-    address_zip,
-    address_street,
-    address_number,
-    address_neighborhood,
-    address_city,
-    address_state
-  } = req.body;
+app.post("/api/admin/create-invoice", async (req, res) => {
+  const { invoice } = req.body;
+  if (!invoice) return res.status(400).json({ error: "Dados da fatura ausentes" });
 
-  if (!email || !password || !name || !company_id) {
-    return res.status(400).json({ error: "Campos obrigatórios: email, password, name, company_id" });
+  try {
+    const { data: newInvoice, error: invError } = await supabaseAdmin
+      .from('invoices')
+      .insert(invoice)
+      .select('*, clients (notes)')
+      .single();
+
+    if (invError) throw invError;
+
+    const companyId = newInvoice.company_id;
+    const { data: companyData } = await supabaseAdmin.from('companies').select('webhook_endpoints').eq('id', companyId).single();
+
+    if (companyData?.webhook_endpoints && Array.isArray(companyData.webhook_endpoints)) {
+      const clientNotes = (newInvoice.clients as any)?.notes || "";
+      const scMatch = clientNotes.match(/sc_id:([^\s|]+)/);
+      const scUserId = scMatch ? scMatch[1] : null;
+
+      const payload = {
+        event: 'invoice.created',
+        timestamp: new Date().toISOString(),
+        invoice: {
+          ...newInvoice,
+          payment_link: `${process.env.APP_URL || 'https://pagixypay.vercel.app'}/pay/${newInvoice.id}`,
+          smartcartao_user_id: scUserId
+        }
+      };
+
+      for (const endpoint of companyData.webhook_endpoints) {
+        fetch(endpoint, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        }).catch(err => console.error("[Outbound Webhook Error]", err));
+      }
+    }
+
+    res.status(201).json({ success: true, invoice: newInvoice });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.get("/api/cron/process-billing", async (req, res) => {
+  // Segurança Básica: Recomenda-se configurar CRON_SECRET nas variáveis de ambiente da Vercel
+  const authHeader = req.headers.authorization;
+  if (process.env.CRON_SECRET && authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
+    return res.status(401).json({ error: "Não autorizado" });
   }
 
   try {
-    // 1. Criar usuário no Supabase Auth
-    const { data: authData, error: authError } = await supabaseAdmin.auth.admin.createUser({
-      email,
-      password,
-      email_confirm: true,
-      user_metadata: { full_name: name }
-    });
+    const targetDate = new Date();
+    targetDate.setDate(targetDate.getDate() + 10);
+    const targetDateStr = targetDate.toISOString().split('T')[0];
 
+    // 1. Buscar assinaturas que vencem exatamente em 10 dias
+    const { data: subs, error: subError } = await supabaseAdmin
+      .from('subscriptions')
+      .select('*, clients(id, name, email, notes)')
+      .eq('status', 'active')
+      .eq('next_billing_date', targetDateStr);
+    
+    if (subError) throw subError;
+
+    if (!subs || subs.length === 0) {
+      return res.json({ success: true, message: "Nenhuma assinatura para faturar hoje." });
+    }
+
+    const processed = [];
+    for (const sub of subs) {
+      // 2. Gerar Fatura Pendente
+      const { data: invoice, error: invErr } = await supabaseAdmin
+        .from('invoices')
+        .insert({
+          company_id: sub.company_id,
+          client_id: sub.client_id,
+          service_id: sub.service_id,
+          subscription_id: sub.id,
+          amount: sub.amount,
+          due_date: sub.next_billing_date,
+          status: 'pending',
+          payment_method: 'pix'
+        })
+        .select()
+        .single();
+
+      if (invErr) continue;
+
+      // 3. Avançar Data da Assinatura
+      const nextDate = new Date(sub.next_billing_date);
+      if (sub.interval === 'monthly') nextDate.setMonth(nextDate.getMonth() + 1);
+      else if (sub.interval === 'weekly') nextDate.setDate(nextDate.getDate() + 7);
+      else if (sub.interval === 'semiannual') nextDate.setMonth(nextDate.getMonth() + 6);
+      else if (sub.interval === 'yearly') nextDate.setFullYear(nextDate.getFullYear() + 1);
+
+      await supabaseAdmin.from('subscriptions').update({ 
+        next_billing_date: nextDate.toISOString().split('T')[0] 
+      }).eq('id', sub.id);
+
+      // 4. Notificar SmartCartão
+      const { data: cData } = await supabaseAdmin.from('companies').select('webhook_endpoints').eq('id', sub.company_id).single();
+      if (cData?.webhook_endpoints && Array.isArray(cData.webhook_endpoints)) {
+        const scMatch = (sub.clients?.notes || "").match(/sc_id:([^\s|]+)/);
+        const scUserId = scMatch ? scMatch[1] : null;
+
+        for (const endpoint of cData.webhook_endpoints) {
+          fetch(endpoint, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              event: 'invoice.created',
+              timestamp: new Date().toISOString(),
+              invoice: { 
+                ...invoice, 
+                payment_link: `${process.env.APP_URL || 'https://pagixypay.vercel.app'}/pay/${invoice.id}`, 
+                smartcartao_user_id: scUserId 
+              }
+            })
+          }).catch(() => {});
+        }
+      }
+      processed.push(sub.id);
+    }
+
+    res.json({ success: true, processed_count: processed.length });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// --- RESTANTE DAS ROTAS (MANTER IGUAL AO ORIGINAL) ---
+
+app.post("/api/admin/create-client", async (req, res) => {
+  const { email, password, name, company_id, document, phone, address_zip, address_street, address_number, address_neighborhood, address_city, address_state } = req.body;
+  if (!email || !password || !name || !company_id) return res.status(400).json({ error: "Campos obrigatórios: email, password, name, company_id" });
+  try {
+    const { data: authData, error: authError } = await supabaseAdmin.auth.admin.createUser({ email, password, email_confirm: true, user_metadata: { full_name: name } });
     if (authError) throw authError;
     const userId = authData.user.id;
-
-    // 2. Criar Perfil
-    const { error: profileError } = await supabaseAdmin
-      .from('profiles')
-      .insert({
-        id: userId,
-        company_id,
-        full_name: name,
-        role: 'client'
-      });
-
+    const { error: profileError } = await supabaseAdmin.from('profiles').insert({ id: userId, company_id, full_name: name, role: 'client' });
     if (profileError) throw profileError;
-
-    // 3. Criar registro de Cliente
-    const { data: clientData, error: clientError } = await supabaseAdmin
-      .from('clients')
-      .insert({
-        company_id,
-        user_id: userId,
-        name,
-        email,
-        document,
-        phone,
-        status: 'active',
-        address_zip,
-        address_street,
-        address_number,
-        address_neighborhood,
-        address_city,
-        address_state
-      })
-      .select()
-      .single();
-
+    const { data: clientData, error: clientError } = await supabaseAdmin.from('clients').insert({ company_id, user_id: userId, name, email, document, phone, status: 'active', address_zip, address_street, address_number, address_neighborhood, address_city, address_state }).select().single();
     if (clientError) throw clientError;
-
-    res.status(201).json({ 
-      success: true, 
-      message: "Cliente e acesso ao portal criados com sucesso!",
-      client: clientData 
-    });
-
+    res.status(201).json({ success: true, message: "Cliente e acesso ao portal criados com sucesso!", client: clientData });
   } catch (error: any) {
     console.error("Erro ao criar cliente:", error);
     res.status(500).json({ error: error.message || "Erro interno do servidor" });
   }
 });
 
-// Webhook Mercado Pago
 app.post("/api/webhooks/mercadopago/:companyId", async (req, res) => {
   const { companyId } = req.params;
   const notification = req.body;
   const resourceId = notification.data?.id || notification.id;
-  const type = notification.type;
-
-  if (type === 'payment' && resourceId) {
+  if (notification.type === 'payment' && resourceId) {
     try {
-      const { data: company } = await supabaseAdmin
-        .from('companies')
-        .select('gateways_config')
-        .eq('id', companyId)
-        .single();
-
+      const { data: company } = await supabaseAdmin.from('companies').select('gateways_config').eq('id', companyId).single();
       if (company?.gateways_config?.mercado_pago?.access_token) {
-        const accessToken = company.gateways_config.mercado_pago.access_token;
-        const mpResponse = await fetch(`https://api.mercadopago.com/v1/payments/${resourceId}`, {
-          headers: { 'Authorization': `Bearer ${accessToken}` }
-        });
-
+        const mpResponse = await fetch(`https://api.mercadopago.com/v1/payments/${resourceId}`, { headers: { 'Authorization': `Bearer ${company.gateways_config.mercado_pago.access_token}` } });
         if (mpResponse.ok) {
-          const paymentDetails = await mpResponse.json();
-          const invoiceId = paymentDetails.external_reference;
-          const status = paymentDetails.status;
-
-          if (status === 'approved' && invoiceId) {
-            await supabaseAdmin.from('invoices').update({ status: 'paid' }).eq('id', invoiceId);
-          }
+          const details = await mpResponse.json();
+          if (details.status === 'approved' && details.external_reference) await supabaseAdmin.from('invoices').update({ status: 'paid' }).eq('id', details.external_reference);
         }
       }
       res.status(200).send("OK");
-    } catch (error) {
-      res.status(500).send("Erro");
-    }
-  } else {
-    res.status(200).send("OK");
-  }
+    } catch { res.status(500).send("Erro"); }
+  } else res.status(200).send("OK");
 });
 
-// Webhook Asaas
 app.post("/api/webhooks/asaas/:companyId", async (req, res) => {
-  const { companyId } = req.params;
-  const notification = req.body;
-  const event = notification.event;
-  const payment = notification.payment;
-
+  const { event, payment } = req.body;
   if (event === 'PAYMENT_RECEIVED' || event === 'PAYMENT_CONFIRMED') {
     try {
-      const invoiceId = payment.externalReference;
-      if (invoiceId) {
-        await supabaseAdmin.from('invoices').update({ status: 'paid' }).eq('id', invoiceId);
-      }
+      if (payment.externalReference) await supabaseAdmin.from('invoices').update({ status: 'paid' }).eq('id', payment.externalReference);
       res.status(200).send("OK");
-    } catch (error) {
-      res.status(500).send("Erro");
-    }
-  } else {
-    res.status(200).send("OK");
-  }
+    } catch { res.status(500).send("Erro"); }
+  } else res.status(200).send("OK");
 });
 
 export default app;

@@ -9,5 +9,11 @@
       "source": "/((?!api|assets|favicon.ico|robots.txt).*)",
       "destination": "/index.html"
     }
+  ],
+  "crons": [
+    {
+      "path": "/api/cron/process-billing",
+      "schedule": "0 0 * * *"
+    }
   ]
 }

@@ -129,74 +129,206 @@ async function startServer() {
 
   // Endpoint de integração para o SmartCartao (PagiXyPay billing integration)
   app.post("/api/clients", async (req, res) => {
-    const { id: scUserId, name, email, document, amount } = req.body;
+    const { id: scUserId, name, email, document, amount, password } = req.body;
     
-    if (!email || !name) return res.status(400).json({ error: "Email/Name required" });
+    const log = (msg: string) => {
+      const entry = `[${new Date().toISOString()}] [Integration] ${msg}\n`;
+      console.log(entry.trim());
+      try {
+        require('fs').appendFileSync('integration_log.txt', entry);
+      } catch (e) {
+        console.error("Erro ao gravar log no arquivo:", e);
+      }
+    };
+
+    log(`>>> INÍCIO DA INTEGRAÇÃO: user=${email}, id_origem=${scUserId}`);
+    
+    if (!email || !name) {
+      log("ERRO: Dados incompletos (e-mail ou nome ausente).");
+      return res.status(400).json({ error: "Email and Name are required" });
+    }
 
     try {
-      // 1. Resolve Empresa (Multi-tenant)
+      // 1. Resolve Empresa
       const { data: company } = await supabaseAdmin.from('companies').select('id').limit(1).single();
       const companyId = company?.id;
+      if (!companyId) throw new Error("Empresa padrão não encontrada no banco.");
+      log(`Empresa resolvida: ${companyId}`);
 
-      if (!companyId) throw new Error("No company found");
+      // 2. Auth User Sync
+      let userId: string | null = null;
+      
+      // Tentar encontrar usuário existente
+      const { data: usersData } = await supabaseAdmin.auth.admin.listUsers();
+      const existingUser = (usersData?.users || []).find((u: any) => u.email === email);
+      
+      const finalPassword = password || (document ? String(document).replace(/\D/g, '').slice(0, 8) : "Pagixy@2026");
 
-      // 2. Registro do Cliente (Manual Upsert para evitar erro de constraint)
+      if (!existingUser) {
+        log("Auth User não encontrado. Criando novo usuário...");
+        const { data: authData, error: authErr } = await supabaseAdmin.auth.admin.createUser({
+          email,
+          password: finalPassword.length >= 6 ? finalPassword : "Pagixy@2026",
+          email_confirm: true,
+          user_metadata: { full_name: name }
+        });
+        
+        if (authErr) {
+          log(`AVISO: Falha ao criar Auth User: ${authErr.message}`);
+          // Se o erro for que já existe (race condition), tenta buscar novamente
+          if (authErr.message.includes("already registered") || authErr.message.includes("exists")) {
+             const { data: retryList } = await supabaseAdmin.auth.admin.listUsers();
+             userId = (retryList?.users || []).find((u: any) => u.email === email)?.id || null;
+          }
+        } else {
+          userId = authData.user.id;
+          log(`Auth User criado com sucesso: ${userId}`);
+        }
+      } else {
+        userId = existingUser.id;
+        log(`Auth User já existe: ${userId}`);
+        if (password) {
+          await supabaseAdmin.auth.admin.updateUserById(userId, { password });
+          log("Senha sincronizada conforme payload.");
+        }
+      }
+
+      // Garantir Perfil (importante para o login funcionar)
+      if (userId) {
+        const { data: profile } = await supabaseAdmin.from('profiles').select('id').eq('id', userId).maybeSingle();
+        if (!profile) {
+          log("Perfil não encontrado. Criando perfil...");
+          await supabaseAdmin.from('profiles').insert({
+            id: userId,
+            company_id: companyId,
+            full_name: name,
+            role: 'client'
+          });
+          log("Perfil criado.");
+        }
+      }
+
+      // 3. Cliente Sync
       let { data: client, error: cErr } = await supabaseAdmin
         .from('clients')
-        .select('id')
+        .select('id, user_id, notes')
         .eq('company_id', companyId)
         .eq('email', email)
         .maybeSingle();
 
-      if (cErr) throw cErr;
+      if (cErr) {
+        log(`Erro ao buscar cliente: ${cErr.message}`);
+        throw cErr;
+      }
+
+      const clientNotes = `sc_id:${scUserId}`;
 
       if (!client) {
+        log("Cliente não encontrado na tabela 'clients'. Inserindo...");
         const { data: newClient, error: insertErr } = await supabaseAdmin
           .from('clients')
           .insert({
             company_id: companyId,
-            name, email, document, status: 'active'
+            user_id: userId,
+            name, email, document, status: 'active',
+            notes: clientNotes
           })
-          .select('id')
+          .select('id, user_id, notes')
           .single();
-        if (insertErr) throw insertErr;
+        
+        if (insertErr) {
+          log(`Erro na inserção do cliente: ${insertErr.message}`);
+          throw insertErr;
+        }
         client = newClient;
+        log(`Novo cliente inserido: ${client.id}`);
       } else {
-        // Update name/document if exists
+        log(`Cliente já existe: ${client.id}. Atualizando dados...`);
         const { error: updateErr } = await supabaseAdmin
           .from('clients')
-          .update({ name, document })
+          .update({ 
+            name, 
+            document, 
+            user_id: client.user_id || userId,
+            notes: client.notes?.includes('sc_id:') ? client.notes : (client.notes ? `${client.notes} | ${clientNotes}` : clientNotes)
+          })
           .eq('id', client.id);
-        if (updateErr) throw updateErr;
+        
+        if (updateErr) {
+          log(`Erro na atualização do cliente: ${updateErr.message}`);
+          throw updateErr;
+        }
       }
-
-      // 3. Criar Fatura Pendente
-      const dueDate = new Date();
-      dueDate.setDate(dueDate.getDate() + 3);
-
-      const { data: invoice, error: iErr } = await supabaseAdmin.from('invoices').insert({
-        company_id: companyId,
-        client_id: client.id,
-        amount: parseFloat(String(amount || '49.00').replace(',', '.')),
-        due_date: dueDate.toISOString().split('T')[0],
-        status: 'pending',
-        payment_method: 'pix',
-        external_reference: scUserId
-      }).select().single();
-
-      if (iErr) throw iErr;
 
       res.status(201).json({
         success: true,
         id: client.id,
-        amount: invoice.amount.toFixed(2),
-        due_date: invoice.due_date,
-        payment_link: `${process.env.APP_URL || 'http://localhost:3000'}/fatura/${invoice.id}`,
-        url: `${process.env.APP_URL || 'http://localhost:3000'}/fatura/${invoice.id}`
+        message: "Cliente sincronizado com sucesso. Nenhuma fatura foi gerada automaticamente."
       });
+
     } catch (err: any) {
-      console.error("Erro na integração SmartCartao:", err);
-      res.status(500).json({ error: err.message });
+      log(`ERRO FATAL NA INTEGRAÇÃO: ${err.message}`);
+      res.status(500).json({ error: err.message || "Erro interno do servidor." });
+    }
+  });
+
+  // Criar Fatura Manual com Dispatch de Webhook (Sincronização SmartCartão)
+  app.post("/api/admin/create-invoice", async (req, res) => {
+    const { invoice } = req.body;
+    if (!invoice) return res.status(400).json({ error: "Dados da fatura ausentes" });
+
+    try {
+      // 1. Inserir fatura no banco
+      const { data: newInvoice, error: invError } = await supabaseAdmin
+        .from('invoices')
+        .insert(invoice)
+        .select(`
+          *,
+          clients (name, email, notes),
+          services (name)
+        `)
+        .single();
+
+      if (invError) throw invError;
+
+      // 2. Tentar disparar webhooks para sistemas externos (SmartCartão)
+      const companyId = newInvoice.company_id;
+      const { data: companyData } = await supabaseAdmin
+        .from('companies')
+        .select('webhook_endpoints')
+        .eq('id', companyId)
+        .single();
+
+      if (companyData?.webhook_endpoints && Array.isArray(companyData.webhook_endpoints)) {
+        // Extrair o ID da SmartCartão das notas do cliente
+        const clientNotes = (newInvoice.clients as any)?.notes || "";
+        const scMatch = clientNotes.match(/sc_id:([^\s|]+)/);
+        const scUserId = scMatch ? scMatch[1] : null;
+
+        const payload = {
+          event: 'invoice.created',
+          timestamp: new Date().toISOString(),
+          invoice: {
+            ...newInvoice,
+            payment_link: `${process.env.APP_URL || 'https://pagixypay.vercel.app'}/pay/${newInvoice.id}`,
+            smartcartao_user_id: scUserId
+          }
+        };
+
+        for (const endpoint of companyData.webhook_endpoints) {
+          console.log(`[Outbound Webhook] Sincronizando nova fatura com: ${endpoint}`);
+          fetch(endpoint, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+          }).catch(err => console.error(`[Outbound Webhook] Erro ao enviar para ${endpoint}:`, err));
+        }
+      }
+
+      res.status(201).json({ success: true, invoice: newInvoice });
+    } catch (error: any) {
+      console.error("Erro ao criar fatura e disparar webhook:", error);
+      res.status(500).json({ error: error.message || "Erro interno ao processar fatura" });
     }
   });
 
@@ -328,6 +460,28 @@ async function startServer() {
           }
 
           console.log(`[Webhook Asaas] Fatura ${invoiceId} liquidada com sucesso!`);
+
+          // OUTBOUND WEBHOOK: Notificar SmartCartão sobre o pagamento via Asaas
+          try {
+            const { data: invData } = await supabaseAdmin.from('invoices').select('*, clients(notes)').eq('id', invoiceId).single();
+            const { data: cData } = await supabaseAdmin.from('companies').select('webhook_endpoints').eq('id', companyId).single();
+
+            if (cData && Array.isArray(cData.webhook_endpoints) && invData) {
+              for (const endpoint of cData.webhook_endpoints) {
+                fetch(endpoint, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({
+                    event: 'payment.received',
+                    timestamp: new Date().toISOString(),
+                    invoice: invData
+                  })
+                }).catch(err => console.error(`[Outbound Webhook Error]`, err));
+              }
+            }
+          } catch (hookError: any) {
+            console.log("[Outbound Webhook] Falha ao despachar webhook Asaas:", hookError.message);
+          }
         }
         res.status(200).send("OK");
       } catch (error) {
@@ -339,6 +493,95 @@ async function startServer() {
       res.status(200).send("OK");
     }
   });
+
+  // --- AUTOMAÇÃO DE ASSINATURAS (Gerar fatura 10 dias antes) ---
+  async function processAutomaticBilling() {
+    console.log("[Automation] Verificando assinaturas para faturamento antecipado (10 dias)...");
+    const targetDate = new Date();
+    targetDate.setDate(targetDate.getDate() + 10);
+    const targetDateStr = targetDate.toISOString().split('T')[0];
+
+    const { data: subs, error } = await supabaseAdmin
+      .from('subscriptions')
+      .select('*, clients(id, name, email, notes)')
+      .eq('status', 'active')
+      .eq('next_billing_date', targetDateStr);
+
+    if (error) {
+      console.error("[Automation] Erro ao buscar assinaturas:", error);
+      return;
+    }
+
+    if (!subs || subs.length === 0) {
+      console.log(`[Automation] Nenhuma assinatura para faturar em ${targetDateStr}.`);
+      return;
+    }
+
+    for (const sub of subs) {
+      try {
+        console.log(`[Automation] Gerando fatura para assinatura ${sub.id} (Cliente: ${sub.clients?.name})`);
+        
+        const { data: invoice, error: invErr } = await supabaseAdmin
+          .from('invoices')
+          .insert({
+            company_id: sub.company_id,
+            client_id: sub.client_id,
+            service_id: sub.service_id,
+            subscription_id: sub.id,
+            amount: sub.amount,
+            due_date: sub.next_billing_date,
+            status: 'pending',
+            payment_method: 'pix'
+          })
+          .select()
+          .single();
+
+        if (invErr) throw invErr;
+
+        // Avançar data de cobrança
+        const nextDueDate = new Date(sub.next_billing_date);
+        if (sub.interval === 'monthly' || sub.interval === 'monthly') nextDueDate.setMonth(nextDueDate.getMonth() + 1);
+        else if (sub.interval === 'weekly') nextDueDate.setDate(nextDueDate.getDate() + 7);
+        else if (sub.interval === 'semiannual') nextDueDate.setMonth(nextDueDate.getMonth() + 6);
+        else if (sub.interval === 'yearly') nextDueDate.setFullYear(nextDueDate.getFullYear() + 1);
+
+        await supabaseAdmin
+          .from('subscriptions')
+          .update({ next_billing_date: nextDueDate.toISOString().split('T')[0] })
+          .eq('id', sub.id);
+
+        // Notificar SmartCartão
+        const { data: cData } = await supabaseAdmin.from('companies').select('webhook_endpoints').eq('id', sub.company_id).single();
+        if (cData?.webhook_endpoints && Array.isArray(cData.webhook_endpoints)) {
+          const scMatch = (sub.clients?.notes || "").match(/sc_id:([^\s|]+)/);
+          const scUserId = scMatch ? scMatch[1] : null;
+
+          for (const endpoint of cData.webhook_endpoints) {
+             fetch(endpoint, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  event: 'invoice.created',
+                  timestamp: new Date().toISOString(),
+                  invoice: { 
+                    ...invoice, 
+                    payment_link: `${process.env.APP_URL || 'https://pagixypay.vercel.app'}/pay/${invoice.id}`, 
+                    smartcartao_user_id: scUserId 
+                  }
+                })
+             }).catch(e => console.error("[Automation Webhook Error]", e));
+          }
+        }
+      } catch (e: any) {
+        console.error(`[Automation] Erro na sub ${sub.id}:`, e.message);
+      }
+    }
+  }
+
+  // Rodar a cada 12 horas
+  setInterval(processAutomaticBilling, 12 * 60 * 60 * 1000);
+  // Rodar uma vez ao iniciar (com delay para não sobrepor boot)
+  setTimeout(processAutomaticBilling, 30000);
 
   // --- VITE MIDDLEWARE ---
   if (process.env.NODE_ENV !== "production") {
