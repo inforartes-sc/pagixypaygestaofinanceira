@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { Link, useLocation, Outlet, useNavigate } from 'react-router-dom';
+import { supabase } from '../../lib/supabase';
 import { 
   LayoutDashboard,
   Users,
@@ -38,6 +39,21 @@ export default function DashboardLayout() {
   const [isNotificationsOpen, setIsNotificationsOpen] = useState(false);
   const [notifications, setNotifications] = useState<any[]>([]);
   const { user, signOut, profile } = useAuth();
+  const [companyLogo, setCompanyLogo] = useState<string | null>(null);
+
+  useEffect(() => {
+    const fetchLogo = async () => {
+      try {
+        const { data } = await supabase
+          .from('companies')
+          .select('logo_url')
+          .limit(1)
+          .single();
+        if (data?.logo_url) setCompanyLogo(data.logo_url);
+      } catch (e) {}
+    };
+    fetchLogo();
+  }, []);
 
   const fetchNotifications = useCallback(async () => {
     if (!user) return;
@@ -90,17 +106,26 @@ export default function DashboardLayout() {
   return (
     <div className="min-h-screen bg-slate-50 flex">
       {/* Sidebar Desktop */}
-      <aside className="hidden md:flex flex-col w-64 bg-white border-r border-slate-200">
+      <aside className="hidden md:flex flex-col w-64 bg-white border-r border-slate-200 sticky top-0 h-screen overflow-hidden">
         <div className="p-6">
-          <div className="flex items-center gap-2">
-            <div className="w-8 h-8 bg-indigo-600 rounded-lg flex items-center justify-center">
-              <CreditCard className="text-white w-5 h-5" />
-            </div>
-            <span className="text-xl font-bold text-slate-900 tracking-tight">PagixyPay</span>
+          <div className="flex flex-col items-center gap-1">
+            {companyLogo ? (
+              <>
+                <img src={companyLogo} alt="Logo" className="h-14 w-auto object-contain" />
+                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-[0.2em]">Gestão Financeira</p>
+              </>
+            ) : (
+              <div className="flex items-center gap-2 w-full">
+                <div className="w-8 h-8 bg-indigo-600 rounded-lg flex items-center justify-center shrink-0">
+                  <CreditCard className="text-white w-5 h-5" />
+                </div>
+                <span className="text-xl font-bold text-slate-900 tracking-tight">PagixyPay</span>
+              </div>
+            )}
           </div>
         </div>
 
-        <nav className="flex-1 px-4 space-y-1">
+        <nav className="flex-1 px-4 space-y-1 overflow-y-auto custom-scrollbar scrollbar-hide hover:scrollbar-default">
           {navigation.map((item) => {
             const isActive = location.pathname === item.href;
             return (
@@ -281,14 +306,20 @@ export default function DashboardLayout() {
               exit={{ x: '-100%' }}
               className="fixed inset-y-0 left-0 w-72 bg-white shadow-2xl flex flex-col"
             >
-              <div className="p-6 flex items-center justify-between border-b border-slate-50">
-                <div className="flex items-center gap-2">
-                  <div className="w-8 h-8 bg-indigo-600 rounded-lg flex items-center justify-center">
-                    <CreditCard className="text-white w-5 h-5" />
-                  </div>
-                  <span className="text-xl font-bold text-slate-900">PagixyPay</span>
-                </div>
-                <button onClick={() => setIsMobileMenuOpen(false)} className="p-2 hover:bg-slate-100 rounded-xl">
+            <div className="p-6 flex items-center justify-between border-b border-slate-50">
+              <div className="flex items-center gap-2">
+                {companyLogo ? (
+                  <img src={companyLogo} alt="Logo" className="h-8 w-auto object-contain" />
+                ) : (
+                  <>
+                    <div className="w-8 h-8 bg-indigo-600 rounded-lg flex items-center justify-center">
+                      <CreditCard className="text-white w-5 h-5" />
+                    </div>
+                    <span className="text-xl font-bold text-slate-900">PagixyPay</span>
+                  </>
+                )}
+              </div>
+              <button onClick={() => setIsMobileMenuOpen(false)} className="p-2 hover:bg-slate-100 rounded-xl">
                   <X className="w-6 h-6 text-slate-400" />
                 </button>
               </div>

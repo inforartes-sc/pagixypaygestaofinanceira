@@ -1,0 +1,23 @@
+[
+  {
+    "id": "178b3a99-ec38-4097-9d69-3f3f644b6d43",
+    "company_id": "ab4841d3-bcce-4621-b2c8-bcb4630f6619",
+    "full_name": "teste",
+    "role": "client",
+    "created_at": "2026-03-29T02:16:56.335746+00:00"
+  },
+  {
+    "id": "f799026d-2fa0-4ca7-bc79-81267e14b691",
+    "company_id": "ab4841d3-bcce-4621-b2c8-bcb4630f6619",
+    "full_name": "InforArtes Admin",
+    "role": "admin",
+    "created_at": "2026-03-28T01:28:01.117337+00:00"
+  },
+  {
+    "id": "acbe25b7-111d-486c-85ac-a147ffd20ecc",
+    "company_id": "ab4841d3-bcce-4621-b2c8-bcb4630f6619",
+    "full_name": "Olzenis Gomes",
+    "role": "admin",
+    "created_at": "2026-03-27T02:52:36.708468+00:00"
+  }
+]

@@ -1,0 +1,19 @@
+[
+  {
+    "id": "1aa9cdd1-f6d9-49ba-a5d9-ac75e5346cc3",
+    "company_id": "ab4841d3-bcce-4621-b2c8-bcb4630f6619",
+    "name": "INFOR ARTES",
+    "email": "inforartes.ap@gmail.com",
+    "document": "72669543200",
+    "phone": "48984040762",
+    "status": "active",
+    "address_zip": "88113-130",
+    "address_street": "R. Nossa Sra. de Guadalupe",
+    "address_number": "76",
+    "address_neighborhood": "Serraria",
+    "address_city": "São José",
+    "address_state": "SC",
+    "created_at": "2026-03-28T01:28:01.294929+00:00",
+    "user_id": "f799026d-2fa0-4ca7-bc79-81267e14b691"
+  }
+]

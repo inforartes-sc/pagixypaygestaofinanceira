@@ -14,8 +14,10 @@ import {
   Settings,
   Check,
   Clock,
-  Zap
+  Zap,
+  CreditCard as CreditCardIcon
 } from 'lucide-react';
+import { supabase } from '../../lib/supabase';
 import { cn, formatDate } from '../../lib/utils';
 import { motion, AnimatePresence } from 'motion/react';
 import { Client } from '../../types';
@@ -30,6 +32,21 @@ export default function ClientPortalLayout() {
   const [isNotificationsOpen, setIsNotificationsOpen] = useState(false);
   const [notifications, setNotifications] = useState<any[]>([]);
   const [client, setClient] = useState<Client | null>(null);
+  const [companyLogo, setCompanyLogo] = useState<string | null>(null);
+
+  useEffect(() => {
+    const fetchLogo = async () => {
+      try {
+        const { data } = await supabase
+          .from('companies')
+          .select('logo_url')
+          .limit(1)
+          .single();
+        if (data?.logo_url) setCompanyLogo(data.logo_url);
+      } catch (e) {}
+    };
+    fetchLogo();
+  }, []);
 
   const fetchNotifications = useCallback(async () => {
     if (!user) return;
@@ -99,14 +116,23 @@ export default function ClientPortalLayout() {
       {/* Sidebar Desktop */}
       <aside className="hidden lg:flex flex-col w-72 bg-white border-r border-slate-200 sticky top-0 h-screen">
         <div className="p-8">
-          <div className="flex items-center gap-3 mb-8">
-            <div className="w-10 h-10 bg-indigo-600 rounded-xl flex items-center justify-center shadow-lg shadow-indigo-200">
-              <ShieldCheck className="w-6 h-6 text-white" />
-            </div>
-            <div>
-              <h1 className="text-xl font-bold text-slate-900 tracking-tight">Portal PagixyPay</h1>
-              <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Gestão de Cobrança</p>
-            </div>
+          <div className="flex flex-col items-center gap-2 mb-8">
+            {companyLogo ? (
+              <>
+                <img src={companyLogo} alt="Logo" className="h-16 w-auto object-contain" />
+                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-[0.2em] mt-1">Gestão Financeira</p>
+              </>
+            ) : (
+              <div className="flex items-center gap-3 w-full">
+                <div className="w-10 h-10 bg-indigo-600 rounded-xl flex items-center justify-center shadow-lg shadow-indigo-200 shrink-0">
+                  <ShieldCheck className="w-6 h-6 text-white" />
+                </div>
+                <div>
+                  <h1 className="text-xl font-bold text-slate-900 tracking-tight">Portal PagixyPay</h1>
+                  <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Gestão de Cobrança</p>
+                </div>
+              </div>
+            )}
           </div>
 
           <nav className="space-y-1">
@@ -262,10 +288,19 @@ export default function ClientPortalLayout() {
       {/* Mobile Nav Header */}
       <div className="lg:hidden fixed top-0 left-0 right-0 z-50 bg-white border-b border-slate-200 px-4 py-3 flex items-center justify-between">
         <div className="flex items-center gap-2">
-          <div className="w-8 h-8 bg-indigo-600 rounded-lg flex items-center justify-center">
-            <ShieldCheck className="w-5 h-5 text-white" />
-          </div>
-          <span className="font-bold text-slate-900 text-sm">Portal PagixyPay</span>
+          {companyLogo ? (
+            <div className="flex flex-col items-start gap-0.5">
+                <img src={companyLogo} alt="Logo" className="h-8 w-auto object-contain" />
+                <p className="text-[8px] font-bold text-slate-400 uppercase tracking-widest">Gestão Financeira</p>
+            </div>
+          ) : (
+            <>
+              <div className="w-8 h-8 bg-indigo-600 rounded-lg flex items-center justify-center">
+                <ShieldCheck className="w-5 h-5 text-white" />
+              </div>
+              <span className="font-bold text-slate-900 text-sm">Portal PagixyPay</span>
+            </>
+          )}
         </div>
         <div className="flex items-center gap-2">
             <button 

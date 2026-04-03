@@ -26,6 +26,19 @@ async function startServer() {
   const PORT = 3000;
 
   app.use(express.json());
+  
+  // Logger
+  app.use((req, res, next) => {
+    console.log(`[${new Date().toISOString()}] ${req.method} ${req.url}`);
+    next();
+  });
+  app.use((req, res, next) => {
+    res.header("Access-Control-Allow-Origin", "*");
+    res.header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
+    res.header("Access-Control-Allow-Headers", "Content-Type, Authorization");
+    if (req.method === "OPTIONS") return res.sendStatus(200);
+    next();
+  });
 
   // --- API ROUTES ---
   
@@ -111,6 +124,79 @@ async function startServer() {
     } catch (error: any) {
       console.error("Erro ao criar cliente:", error);
       res.status(500).json({ error: error.message || "Erro interno do servidor" });
+    }
+  });
+
+  // Endpoint de integração para o SmartCartao (PagiXyPay billing integration)
+  app.post("/api/clients", async (req, res) => {
+    const { id: scUserId, name, email, document, amount } = req.body;
+    
+    if (!email || !name) return res.status(400).json({ error: "Email/Name required" });
+
+    try {
+      // 1. Resolve Empresa (Multi-tenant)
+      const { data: company } = await supabaseAdmin.from('companies').select('id').limit(1).single();
+      const companyId = company?.id;
+
+      if (!companyId) throw new Error("No company found");
+
+      // 2. Registro do Cliente (Manual Upsert para evitar erro de constraint)
+      let { data: client, error: cErr } = await supabaseAdmin
+        .from('clients')
+        .select('id')
+        .eq('company_id', companyId)
+        .eq('email', email)
+        .maybeSingle();
+
+      if (cErr) throw cErr;
+
+      if (!client) {
+        const { data: newClient, error: insertErr } = await supabaseAdmin
+          .from('clients')
+          .insert({
+            company_id: companyId,
+            name, email, document, status: 'active'
+          })
+          .select('id')
+          .single();
+        if (insertErr) throw insertErr;
+        client = newClient;
+      } else {
+        // Update name/document if exists
+        const { error: updateErr } = await supabaseAdmin
+          .from('clients')
+          .update({ name, document })
+          .eq('id', client.id);
+        if (updateErr) throw updateErr;
+      }
+
+      // 3. Criar Fatura Pendente
+      const dueDate = new Date();
+      dueDate.setDate(dueDate.getDate() + 3);
+
+      const { data: invoice, error: iErr } = await supabaseAdmin.from('invoices').insert({
+        company_id: companyId,
+        client_id: client.id,
+        amount: parseFloat(String(amount || '49.00').replace(',', '.')),
+        due_date: dueDate.toISOString().split('T')[0],
+        status: 'pending',
+        payment_method: 'pix',
+        external_reference: scUserId
+      }).select().single();
+
+      if (iErr) throw iErr;
+
+      res.status(201).json({
+        success: true,
+        id: client.id,
+        amount: invoice.amount.toFixed(2),
+        due_date: invoice.due_date,
+        payment_link: `${process.env.APP_URL || 'http://localhost:3000'}/fatura/${invoice.id}`,
+        url: `${process.env.APP_URL || 'http://localhost:3000'}/fatura/${invoice.id}`
+      });
+    } catch (err: any) {
+      console.error("Erro na integração SmartCartao:", err);
+      res.status(500).json({ error: err.message });
     }
   });
 

@@ -594,7 +594,7 @@ export default function Billing() {
                           </span>
                         </td>
                         <td className="px-6 py-4">
-                          <span className="text-xs text-slate-500 capitalize">{invoice.payment_method.replace('_', ' ')}</span>
+                          <span className="text-xs text-slate-500 capitalize">{(invoice.payment_method || 'pix').replace('_', ' ')}</span>
                         </td>
                         <td className="px-6 py-4 text-right">
                           <div className="flex items-center justify-end gap-2">
@@ -1210,7 +1210,7 @@ export default function Billing() {
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <div className="space-y-1">
                       <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Método de Pagamento</p>
-                      <p className="text-sm font-medium text-slate-700 capitalize">{selectedInvoice.payment_method.replace('_', ' ')}</p>
+                      <p className="text-sm font-medium text-slate-700 capitalize">{(selectedInvoice.payment_method || 'pix').replace('_', ' ')}</p>
                     </div>
                     <div className="space-y-1">
                       <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Pagamento Via</p>

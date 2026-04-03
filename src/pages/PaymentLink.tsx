@@ -189,7 +189,7 @@ export default function PaymentLink() {
             </div>
             <div className="flex justify-between text-sm">
               <span className="text-slate-500">Método:</span>
-              <span className="font-bold text-slate-900 capitalize">{invoice.payment_method.replace('_', ' ')}</span>
+              <span className="font-bold text-slate-900 capitalize">{(invoice.payment_method || 'pix').replace('_', ' ')}</span>
             </div>
           </div>
         </div>
