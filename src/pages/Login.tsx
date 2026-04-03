@@ -21,6 +21,14 @@ export default function Login() {
   const [dbStatus, setDbStatus] = useState<'checking' | 'online' | 'offline'>('checking');
 
   useEffect(() => {
+    const urlParams = new URLSearchParams(window.location.search);
+    const emailParam = urlParams.get('email');
+    if (emailParam) {
+      setEmail(emailParam);
+    }
+  }, []);
+
+  useEffect(() => {
     if (user) return; // Router redirecionará
     
     const fetchLogoAndCheckDb = async () => {
@@ -228,6 +236,7 @@ export default function Login() {
               <div className="relative group">
                 <Mail className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 group-focus-within:text-blue-600 transition-colors" />
                 <input 
+                  id="email_input_id"
                   type="email" 
                   required
                   disabled={loading}
